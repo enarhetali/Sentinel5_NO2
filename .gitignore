@@ -3,8 +3,6 @@
 /confidential/
 confidential/
 /datas_sentinel5/archives
-/datas_sentinel5/cleaned
-/datas_sentinel5/csv
 secrets.py
 
 # Byte-compiled / optimized / DLL files

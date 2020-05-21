@@ -4,6 +4,8 @@
 confidential/
 /datas_sentinel5/archives
 secrets.py
+/notebooks/SQL_try.ipynb
+/notebooks/get_sentinel5.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

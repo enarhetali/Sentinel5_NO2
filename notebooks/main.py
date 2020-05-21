@@ -4,16 +4,17 @@ import os
 from datetime import datetime
 import time
 
-from urllib.request import urlopen
 import requests
 import json
 import zipfile
 
-import sys
-
 from netCDF4 import Dataset
 import reverse_geocoder as rg
 
+#This is where you put logs for https://www.onda-dias.eu/cms/
+#Example of the contents of the file:
+# user="my_username"
+# password="my_secret_password"
 from confidential import secrets
 
 #CONFIG
@@ -21,25 +22,27 @@ path_drive="../" #Directory pointing to /datas_sentinel5/
 path='../datas_sentinel5/' #Directory pointing AFTER /datas_sentinel5/
 
 # Pour téléchargez les données, veuillez vous enregistrer sur le site ONDA: https://www.onda-dias.eu/cms/
+# CF. previous lines to understand how to configure the secrets file.
 user = secrets.user #Email
 password = secrets.password #Password
 
-# Paramètres de téléchargements
-Param_API=True #True: Requête vers l'API de ONDA + enregistrement dans un CSV | False: Lecture des CSV enregistrés
-Param_Download=True #True: télécharge 1 fichier (i=x) de ONDA. 
-Param_Tracking=True #True: write in tracking_files.csv
+# Download settings
+Param_API=True #True: Query to the ONDA API + recording in a CSV | False: Playback of recorded CSVs without asking the API
+Param_Download=True #True: Download the files from ONDA DIAS API
+Param_Tracking=True #True: write in tracking_files.csv. It may be useful to disable this option when you want to fix a bug that appears during data download.
 
 
-
+#Useless function
 def f_poly(x):
     poly=[[[elem.replace("((","")]] for elem in x[14:-3].split(")),")]
     poly=[[j.split(" ") for j in poly[i][0][0].split(",")] for i in range(0,len(poly))]
     return [poly]
 
+#Function to write logs to the console with a nice timer
 def timer():
     return '['+datetime.now().strftime("%d/%m/%Y %H:%M:%S")+']'
 
-#Distances
+#Distances between two coordinates
 def distance(origin, destination):
     lat1, lon1 = origin
     lat2, lon2 = destination
@@ -55,7 +58,7 @@ def distance(origin, destination):
     return d
 
 
-#Vérification existence dossiers
+#File existence check in datas_sentinel5
 ls=[path_drive+"datas_sentinel5", path_drive+"datas_sentinel5/cleaned", path_drive+"datas_sentinel5/archives", path_drive+"datas_sentinel5/csv"]
 for elem in ls:
     if(os.path.isdir(elem)==0):
@@ -64,10 +67,12 @@ for elem in ls:
         except OSError:
             print ("Creation of the directory failed")
 
+#Maximum number of lines returned by the API. Maximum is 1000.
 top=300
 
-#Updating and loaging files
+#Updated files available for download
 files=[i for i in os.listdir(path_drive+"datas_sentinel5/csv") if os.path.isfile(os.path.join(path_drive+"datas_sentinel5/csv",i)) and 'infos' in i]
+#If there is one file in our datas_sentinel5/csv/ folder:
 if len(files)!=0:
     #Read more recent file
     ls=[os.path.getmtime(path_drive+"datas_sentinel5/csv/"+i) for i in os.listdir(path_drive+"datas_sentinel5/csv") if os.path.isfile(os.path.join(path_drive+"datas_sentinel5/csv",i)) and 'infos' in i]
@@ -94,9 +99,13 @@ if len(files)!=0:
         infos.to_csv(path_drive+"datas_sentinel5/csv/infos_"+infos.creationDate.dt.strftime('%Y_%m_%d_%H_%M')[len(infos.creationDate)-1]+"_to_"+infos.creationDate.dt.strftime('%Y_%m_%d_%H_%M')[0]+".csv")
         del(infos)
 
+##MAIN GOAL: See which days can be fully download
+#Timer to observe the program execution time
 global_start = time.time()
 all_files=pd.DataFrame()
+#List all files in datas_sentinel5/csv/ folder. It's important to do it again because some files may have been added by the API in the previous condition
 ls=[i for i in os.listdir(path_drive+"datas_sentinel5/csv") if os.path.isfile(os.path.join(path_drive+"datas_sentinel5/csv",i)) and 'infos' in i]
+#Reading all files and cleaning
 for elem in ls:
     df=pd.read_csv(path_drive+"datas_sentinel5/csv/"+elem, index_col=0)
     df.creationDate=pd.to_datetime(df.creationDate)
@@ -120,11 +129,12 @@ calendar=calendar.asfreq('D').fillna(0)
 #Add day of week
 calendar["dayofweek"]=calendar.index.dayofweek.values
 
-#As categorical
-calendar["categorical"]=0
-calendar.loc[calendar.downloadable > 0,"categorical"]=1
-calendar.loc[calendar.downloadable >= 12,"categorical"]=2
+#As categorical: we will download a day ONLY if the global coverage is enough.
+calendar["categorical"]=0 #No files availables this day
+calendar.loc[calendar.downloadable > 0,"categorical"]=1 #At least one file is available
+calendar.loc[calendar.downloadable >= 12,"categorical"]=2 #Green light
 
+#We're looking at which days have already been downloaded
 if os.path.isfile(path_drive+"datas_sentinel5/tracking_files.csv"):
     tracking_files=pd.read_csv(path_drive+"datas_sentinel5/tracking_files.csv", index_col=0)
     tracking_files.date=pd.to_datetime(tracking_files.date)
@@ -144,38 +154,44 @@ tracking_files=tracking_files.asfreq('D').fillna(0)
 #Combine to calendar
 calendar["number"]=tracking_files["number"]
 calendar["new_available"]=calendar.downloadable-calendar.number
-#As categorical
-calendar["categorical"]=0
-calendar.loc[calendar.new_available > 0,"categorical"]=1
-calendar.loc[calendar.new_available >= 12,"categorical"]=2
 
-#Create link to download
+#Here it is the difference between the number of files available for one day and the number of files already downloaded. In other words, we observe the new files to download
+calendar["categorical"]=0 #No new files available
+calendar.loc[calendar.new_available > 0,"categorical"]=1 #Be carefull: a new file have been added on this day
+calendar.loc[calendar.new_available >= 12,"categorical"]=2 #A new day can be downloaded
+
+#Create link to download files
 all_files["urls"]="https://catalogue.onda-dias.eu/dias-catalogue/Products("+all_files.id+")/$value"
 all_files=all_files.drop_duplicates()
 all_files=all_files.sort_values("beginPosition", ascending=False)
-    
+
+##MAIN LOOP: One loop = one day we can download.
 for elem_to_dl in calendar[calendar.categorical==2].index:
+    #Floor to day
     infos=all_files[all_files.beginPosition.dt.floor("D")==elem_to_dl]
     infos=infos.drop_duplicates('name')
     tot_files=infos.shape[0]
-    #Remove when size not in interval 
+    #Remove when size is too small or too big (Extremes files lead to errors)
     infos=infos[(infos["size"]>150000000) & (infos["size"]<1000000000)] #No more than 1 Go
     infos=infos.reset_index(drop=True)
 
     i=list(range(0,infos.shape[0]))
     
-    
+    #Downloading the files
     if Param_Download==True:
-        #Check if file doesn't already exist
         to_pop=[]
+        #This loop will appear often. It's to do the treatments sequentially.
         for k in i:
             ls=[elem[:-3] for elem in os.listdir(path)]
+            #Check if file doesn't already exist
+            #Start downloading
             if(infos.loc[k,"name"][:-4] in ls)==False:
-
                 print('\033[0m'+timer()+'[INFO] Beginning download file '+ infos.name[k])
                 r = requests.get(infos.loc[k,"urls"], auth=(user, password))
                 print(timer()+'[INFO] Code '+str(r.status_code))
+                #Catch error
                 if r.status_code != 200:
+                    #New try every minutes
                     while r.status_code != 200:
                         print('\033[1;31;48m'+timer()+'[ERROR] Error '+str(r.status_code)+'. Retry in 1 minute')
                         time.sleep(60)
@@ -184,28 +200,30 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
                 with open(path+infos.loc[k,"name"], 'wb') as f:
                     f.write(r.content)
                 print('\033[0m'+timer()+'[INFO] Unzip file')
+                #Unzip file in a try because errors might occur
                 try:
                     with zipfile.ZipFile(path+infos.loc[k,"name"], 'r') as zip_ref:
                         zip_ref.extractall(path)
                     print(timer()+'[INFO] Delete zipfile')
                     os.remove(path+infos.loc[k,"name"])
                     print(timer()+'[SUCCESS] The file '+infos.name[k]+' has been downloaded and unzipped.')
-                except Exception as e:
+                except Exception:
                     print('\033[1;31;48m'+timer()+'[WARNING] File '+infos.name[k]+' is not a zip file \033[0m')
                     os.remove(path+infos.loc[k,"name"])
                     infos=infos[infos.name != infos.name[k]]
                     to_pop.append(k)
         
+        #Remove files who got an error from the loops 
         for k in to_pop:
             i.pop(i.index(k))
 
-    #Save full data in dict
+    #Start reading datas in dictionnary. Check NETCDF4 for more information
     rootgrp=dict()
     for k in i:
         rootgrp[k]=Dataset(path+infos.loc[k,"name"][:-3]+"nc", "r", format="NETCDF4")
     
     to_pop=[]
-    #Check if PRODUCT groups is in the file. If not, we expulse the file.
+    #Check if PRODUCT groups and nitrogendioxide_tropospheric_column variable are in the file. If not, we expulse the file.
     for k in i:
         if ("PRODUCT" not in rootgrp[k].groups.keys()):
             rootgrp[k].close()
@@ -219,11 +237,12 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
             print('\033[1;31;48m'+timer()+'[WARNING] nitrogendioxide_tropospheric_column '+str(k)+' not in variables. File '+infos.name[k]+' have been removed. \033[0m')
             infos=infos[infos.name != infos.name[k]]
             to_pop.append(k)
-            
+      
+    #Remove files who got an error from the loops 
     for k in to_pop:
             i.pop(i.index(k))
             
-    #Rework data as Dataframe
+    #Cleaning and rework datas to a Dataframe
     df_sat=dict()
     for k in i:
         lon_x=rootgrp[k].groups["PRODUCT"].variables["longitude"][0].data.flatten()
@@ -235,7 +254,7 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
     for k in i:
         df_sat[k]["date"]=np.full((450,rootgrp[k].groups["PRODUCT"].variables["time_utc"].shape[1]), rootgrp[k].groups["PRODUCT"].variables["time_utc"][0]).flatten("F")
 
-    #Get locations infos from latitude and longitude
+    #Get locations infos from latitude and longitude. check reverse_geocoder package for more informations
     coordinates=dict()
     results=dict()
     start_time = time.time()
@@ -264,7 +283,7 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
         #Remove columns generated
         df_sat[k]=df_sat[k].drop(['cc_lat', 'cc_lon', "dist"], axis=1)
     
-    #Save in tracking file
+    #Cleaning is over: we save the day in the csv tracking file
     if Param_Tracking==True:
         #Save the number of files downloaded in the the tracking file
         if os.path.isfile(path_drive+"datas_sentinel5/tracking_files.csv"):
@@ -276,36 +295,39 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
         else:
             pd.DataFrame([[infos.beginPosition.max().floor("D"),infos.shape[0]]], columns=["date","number"]).to_csv(path_drive+"datas_sentinel5/tracking_files.csv")
             
+    #Temporarily saves non-aggregated files in the /cleaned folder
     df_plot=pd.DataFrame()
     for k in i:
         df_sat[k].to_csv(path+"cleaned/"+infos.name[k][:-3]+"csv")
         rootgrp[k].close()
         os.remove(path+infos.name[k][:-3]+"nc")
 
-    #Make some RAM space:
+    #Free some RAM space:
     del(df_sat, coordinates, lat_x, lon_x, rootgrp, results, start_time)
 
-    #files_list=os.listdir("datas_sentinel5/cleaned")
+    #Read files in /cleaned starting with "S5P_OFFL_L2__NO2"
     files_list=[i for i in os.listdir(path+"cleaned") if os.path.isfile(os.path.join(path+"cleaned/",i)) and 'S5P_OFFL_L2__NO2' in i]
     i=list(range(0,len(files_list)))
 
     #Row bind for plot
     df_plot=pd.DataFrame()
-
+    
+    #Read files and concat in one dataframe
     for k in range(0,len(files_list)):
         df_sat=pd.read_csv(path+"cleaned/"+files_list[k], index_col=0)
         df_sat.date=pd.to_datetime(df_sat.date)
         df_plot=pd.concat([df_plot, df_sat])
         del(df_sat)
-        #Restrictions quality
+        #Restrictions quality. Datas with quality < 0.75 are falses/wrongs. See ESA documentation for more informations.
         df_plot=df_plot[df_plot["quality"]>=0.75]
 
     #It is mandatory to replace NaN by "Undefined" to not loose datas
     df_plot=df_plot.fillna("Undefined")
-    #Add Counter too
+    #Add Counter too. This will be usefull when we will aggregate datas to avoid loosing information
     df_plot["counter"]=1
 
-    #Time values
+    #The date is recorded in several separate columns to be able to test if the aggregations have been carried out correctly. 
+    #For example, if we observe that the standard deviation is greater than several hours, we can suspect that the satellite has made several passes over the same city.
     df_plot["hour_mean"]=df_plot.date.dt.hour
     df_plot["hour_std"]=df_plot.date.dt.hour
     df_plot["day_std"]=df_plot.date.dt.day
@@ -319,12 +341,11 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
     #Aggregation
     df_plot=df_plot.groupby(["year","month","week","cc_pays","cc_departement","cc_region","cc_ville"], as_index=False).agg({'longitude':'mean', 'latitude':'mean', 'NO2':'mean', 'quality':'mean', 'hour_mean':'mean', 'hour_std':'std', 'dayofweek_mean':'mean', 'dayofweek_std':'std', 'day_mean':'mean', 'day_std':'std','counter':'sum'})
 
-    from datetime import date
+    #Save final aggregated file as CSV in /archives folder
     filename="archived_"+str(df_plot.year.value_counts()[df_plot.year.value_counts()==df_plot.year.value_counts().max()].index[0])+"_"+str(df_plot.month.value_counts()[df_plot.month.value_counts()==df_plot.month.value_counts().max()].index[0])+"_"+str(int(df_plot.day_mean.value_counts()[df_plot.day_mean.value_counts()==df_plot.day_mean.value_counts().max()].index[0]))+".csv"
-    #Save files
     df_plot.to_csv(path_drive+"datas_sentinel5/archives/"+filename)
 
-    #Cleaning
+    #Cleaning files in /cleaned folder
     del(df_plot)
     for k in range(0,len(files_list)):
         os.remove(path+"cleaned/"+files_list[k])

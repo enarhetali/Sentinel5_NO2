@@ -2,7 +2,6 @@
 /_can_be_deleted/
 /confidential/
 confidential/
-/datas_sentinel5/archives
 secrets.py
 /notebooks/SQL_try.ipynb
 /notebooks/get_sentinel5.ipynb

@@ -343,7 +343,7 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
 
     #Save final aggregated file as CSV in /archives folder
     filename="archived_"+str(df_plot.year.value_counts()[df_plot.year.value_counts()==df_plot.year.value_counts().max()].index[0])+"_"+str(df_plot.month.value_counts()[df_plot.month.value_counts()==df_plot.month.value_counts().max()].index[0])+"_"+str(int(df_plot.day_mean.value_counts()[df_plot.day_mean.value_counts()==df_plot.day_mean.value_counts().max()].index[0]))+".csv"
-    df_plot.to_csv(path_drive+"datas_sentinel5/archives/"+filename)
+    df_plot.to_csv(path_drive+"datas_sentinel5/archives/"+filename+".gz", compression="gzip")
 
     #Cleaning files in /cleaned folder
     del(df_plot)

@@ -189,29 +189,37 @@ for elem_to_dl in calendar[calendar.categorical==2].index:
                 print('\033[0m'+timer()+'[INFO] Beginning download file '+ infos.name[k])
                 r = requests.get(infos.loc[k,"urls"], auth=(user, password))
                 print(timer()+'[INFO] Code '+str(r.status_code))
+                
+                
                 #Catch error
                 if r.status_code != 200:
-                    #New try every minutes
-                    while r.status_code != 200:
-                        print('\033[1;31;48m'+timer()+'[ERROR] Error '+str(r.status_code)+'. Retry in 1 minute')
-                        time.sleep(60)
+                    looping=1
+                    while r.status_code != 200 and looping < 3:
+                        print('\033[1;31;48m'+timer()+'[ERROR] Error '+str(r.status_code)+'. Retry in '+str(looping)+' minute')
+                        time.sleep(60*looping)
                         r = requests.get(infos.loc[k,"urls"], auth=(user, password))
+                        looping=looping+1
                 
-                with open(path+infos.loc[k,"name"], 'wb') as f:
-                    f.write(r.content)
-                print('\033[0m'+timer()+'[INFO] Unzip file')
-                #Unzip file in a try because errors might occur
-                try:
-                    with zipfile.ZipFile(path+infos.loc[k,"name"], 'r') as zip_ref:
-                        zip_ref.extractall(path)
-                    print(timer()+'[INFO] Delete zipfile')
-                    os.remove(path+infos.loc[k,"name"])
-                    print(timer()+'[SUCCESS] The file '+infos.name[k]+' has been downloaded and unzipped.')
-                except Exception:
-                    print('\033[1;31;48m'+timer()+'[WARNING] File '+infos.name[k]+' is not a zip file \033[0m')
-                    os.remove(path+infos.loc[k,"name"])
+                if r.status_code == 200:
+                    with open(path+infos.loc[k,"name"], 'wb') as f:
+                        f.write(r.content)
+                    print('\033[0m'+timer()+'[INFO] Unzip file')
+                    try:
+                        with zipfile.ZipFile(path+infos.loc[k,"name"], 'r') as zip_ref:
+                            zip_ref.extractall(path)
+                        print(timer()+'[INFO] Delete zipfile')
+                        os.remove(path+infos.loc[k,"name"])
+                        print(timer()+'[SUCCESS] The file '+infos.name[k]+' has been downloaded and unzipped.')
+                    except Exception as e:
+                        print('\033[1;31;48m'+timer()+'[WARNING] File '+infos.name[k]+' is not a zip file \033[0m')
+                        os.remove(path+infos.loc[k,"name"])
+                        infos=infos[infos.name != infos.name[k]]
+                        to_pop.append(k)
+                else:
+                    print('\033[1;31;48m'+timer()+'[ERROR] Error '+str(r.status_code)+'. Skipping file.')
                     infos=infos[infos.name != infos.name[k]]
                     to_pop.append(k)
+
         
         #Remove files who got an error from the loops 
         for k in to_pop:
